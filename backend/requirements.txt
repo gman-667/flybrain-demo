@@ -1,0 +1,87 @@
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from backend.flybrain_simulator import FlyBrainSimulator
+
+app = FastAPI(title="Fly Brain AI Demo")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+simulator = FlyBrainSimulator()
+
+try:
+    from transformers import pipeline
+    generator = pipeline("text2text-generation", model="google/flan-t5-small")
+    model_status = "available"
+except Exception:
+    generator = None
+    model_status = "unavailable"
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = BASE_DIR / "frontend"
+
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+
+class ChatRequest(BaseModel):
+    prompt: str
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "model_status": model_status}
+
+
+@app.get("/api/model-status")
+def model_status_endpoint():
+    return {"model_status": model_status}
+
+
+@app.post("/api/chat")
+def chat(request: ChatRequest):
+    prompt = (request.prompt or "").strip()
+    if not prompt:
+        prompt = "Hello fly brain"
+
+    brain_state = simulator.simulate(prompt)
+    action = simulator.create_action_payload(prompt)
+
+    if generator is not None:
+        neural_summary = (
+            "The simulated fly brain receives the prompt and produces a neural response "
+            f"with dominant signal {brain_state['dominant_signal']} and peak neuron {brain_state['peak_neuron']}. "
+            "Respond in a friendly, concise, and practical way."
+        )
+        raw_response = generator(neural_summary, max_new_tokens=60)[0]["generated_text"]
+        answer = raw_response.strip()
+    else:
+        answer = (
+            f"The fly-brain-inspired system detected the phrase '{prompt}' and responded "
+            f"with a dominant neural excitation around neuron {brain_state['peak_neuron']}. "
+            "This is an early prototype signal, not a scientific brain model."
+        )
+
+    return {
+        "prompt": prompt,
+        "brain_state": brain_state,
+        "action": action,
+        "response": answer,
+    }
+
+
+@app.get("/")
+def index():
+    return FileResponse(FRONTEND_DIR / "index.html")
